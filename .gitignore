@@ -1,0 +1,18 @@
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.pytest_cache
+# Virtual environments
+.venv
+
+#.env
+.env
+
+#Data
+*pdfs
+*api_outputs
+*codex
+*data
