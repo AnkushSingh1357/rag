@@ -2,6 +2,8 @@
 python-dotenv
 pydantic
 typing-extensions
+uvicorn
+fastapi
 
 # LangChain ecosystem
 langchain
