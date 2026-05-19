@@ -1,53 +1,39 @@
 import os
-import json
-
-from langchain.tools import tool
-import ollama
 import requests
 
-# -------------------------
-# Web Search Tool
-# -------------------------
+# ✅ FIX: langchain_core.tools, not langchain.tools
+from langchain_core.tools import tool
+import ollama
+
+
 @tool
-def web_search(query: str):
-    """
-    Perform a live web search using Ollama Cloud Web Search API for real-time information and news.
+def web_search(query: str) -> str:
+    """Perform a live web search for real-time information.
 
-    Input:
-        query: search query string
-
-    Output:
-        JSON string of top results (max_results=2).
-    """
-
-    response = ollama.web_search(query=query, max_results=2)
-    response = response.results
-
-    return response
-
-
-# -------------------------
-# Weather Tool
-# -------------------------
-@tool
-def get_weather(location: str):
-    """Get current weather for a location using WeatherAPI.com.
-    
-    Use for queries about weather, temperature, or conditions in any city.
-    Examples: "weather in Paris", "temperature in Tokyo", "is it raining in London"
-    
     Args:
-        location: City name (e.g., "New York", "London", "Tokyo")
-        
+        query: Search query string.
+
     Returns:
-        Current weather information including temperature and conditions.
+        JSON string of top results (max 2).
     """
+    response = ollama.web_search(query=query, max_results=2)
+    return str(response.results)
 
-    url = f"http://api.weatherapi.com/v1/current.json?key={os.getenv('WEATHER_API_KEY')}&q={location}&aqi=no"
 
+@tool
+def get_weather(location: str) -> dict:
+    """Get current weather for a city using WeatherAPI.
+
+    Args:
+        location: City name (e.g. 'New York', 'London').
+
+    Returns:
+        Current weather data dict.
+    """
+    url = (
+        f"http://api.weatherapi.com/v1/current.json"
+        f"?key={os.getenv('WEATHER_API_KEY')}&q={location}&aqi=no"
+    )
     response = requests.get(url=url, timeout=10)
     response.raise_for_status()
-
-    data = response.json()
-
-    return data
+    return response.json()

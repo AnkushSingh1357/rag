@@ -1,6 +1,18 @@
 services:
+  researcher:
+    build: .
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./research_outputs:/app/research_outputs
+      - ./agent_files:/app/agent_files
+    command: python main_deepagents.py
+
   qdrant:
     image: qdrant/qdrant:latest
+    profiles:
+      - local-qdrant
     ports:
       - "6333:6333"
     volumes:

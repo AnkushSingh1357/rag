@@ -1,0 +1,11 @@
+.git
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.env
+data/rag-data
+data/*.zip
+research_outputs
+agent_files
+*.db

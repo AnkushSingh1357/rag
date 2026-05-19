@@ -1,66 +1,58 @@
-"""Yahoo Finance MCP module with LangChain integration."""
-
-######## MCP SETUP ###############
-# MCP GITHUB
-# https://github.com/laxmimerit/MCP-Mastery-with-Claude-and-Langchain
-# https://github.com/laxmimerit/Agentic-RAG-with-LangGraph-and-Ollama
-
-# https://github.com/langchain-ai/langchain-mcp-adapters
-# https://github.com/laxmimerit/yahoo-finance-mcp-server
+"""Yahoo Finance MCP module with LangGraph integration."""
 
 import warnings
-
 warnings.filterwarnings("ignore")
 
 import os
 import sys
+import asyncio
 
-# Set UTF-8 encoding for Windows console
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
 
 from dotenv import load_dotenv
+load_dotenv(override=True)
 
-load_dotenv()
-
+from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage
-from langchain.agents import create_agent
-from langchain_google_genai import ChatGoogleGenerativeAI
-from scripts.config import GEMINI_CHAT_MODEL
 
-import asyncio
+# ✅ FIX: create_react_agent from langgraph, not create_agent from langchain.agents
+from langgraph.prebuilt import create_react_agent
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
-llm = ChatGoogleGenerativeAI(model=GEMINI_CHAT_MODEL)
+from scripts.config import GROQ_API_KEY
+
+llm = ChatGroq(
+    groq_api_key=GROQ_API_KEY,
+    model_name=os.getenv("GROQ_MODEL_NAME", "llama-3.3-70b-versatile"),
+    temperature=0,
+    max_tokens=1024,   # ✅ OPT: cap tokens for live finance answers
+)
+
+# ✅ OPT: Trimmed system prompt — same instructions, ~60% fewer tokens
+_SYSTEM_PROMPT = """\
+You are a financial research assistant using Yahoo Finance data.
+
+Tools available:
+- get_historical_stock_prices(ticker, period='1mo', interval='1d')
+- get_stock_info(ticker) — price, metrics, financials
+- get_yahoo_finance_news(ticker)
+- get_stock_actions(ticker) — dividends, splits
+- get_financial_statement(ticker, financial_type) — income_stmt, balance_sheet, cashflow (quarterly variants too)
+- get_holder_info(ticker, holder_type) — major_holders, institutional_holders, etc.
+- get_option_expiration_dates(ticker)
+- get_option_chain(ticker, expiration_date, option_type) — 'calls' or 'puts'
+- get_recommendations(ticker, recommendation_type, months_back=12)
+
+Rules:
+1. Always call at least one tool before responding.
+2. Extract the ticker from the query (AAPL, MSFT, AMZN, META).
+3. For general queries, start with get_stock_info.
+4. Present key numbers and trends clearly. Be concise.
+"""
 
 
-system_prompt = """
-                You are a financial research assistant helping users analyze stocks and financial data using Yahoo Finance.
-
-                Available Tools:
-                - get_historical_stock_prices: Get historical stock prices (ticker required, optional: period='1mo', interval='1d')
-                - get_stock_info: Get comprehensive stock information including price, metrics, financials, etc.
-                - get_yahoo_finance_news: Get latest news for a stock ticker
-                - get_stock_actions: Get dividends and stock splits information
-                - get_financial_statement: Get financial statements (ticker and financial_type required: income_stmt, quarterly_income_stmt, balance_sheet, quarterly_balance_sheet, cashflow, quarterly_cashflow)
-                - get_holder_info: Get holder information (ticker and holder_type required: major_holders, institutional_holders, mutualfund_holders, insider_transactions, insider_purchases, insider_roster_holders)
-                - get_option_expiration_dates: Get available option expiration dates
-                - get_option_chain: Get option chain data (ticker, expiration_date, option_type required: 'calls' or 'puts')
-                - get_recommendations: Get analyst recommendations (ticker and recommendation_type required: recommendations, upgrades_downgrades, optional: months_back=12)
-
-                Instructions:
-                - ALWAYS start by calling relevant tools to gather financial data when user asks about stocks
-                - Extract ticker symbol from user query (e.g., AAPL, MSFT, GOOGL)
-                - For general stock inquiries, start with get_stock_info to get comprehensive data
-                - For price analysis, use get_historical_stock_prices with appropriate period
-                - For news and sentiment, use get_yahoo_finance_news
-                - Present data in a clear, organized format with key insights highlighted
-                - Include specific numbers, percentages, and trends in your analysis
-                - Be proactive - gather data first, then provide comprehensive analysis
-                """
-
-
-async def get_tools():
+async def _get_tools():
     client = MultiServerMCPClient(
         {
             "yahoo-finance": {
@@ -70,30 +62,28 @@ async def get_tools():
             }
         }
     )
-
-    tools = await client.get_tools()
-
-    # print(f"Loaded {len(tools)} tools")
-    # print(f"Tools available: {[tool.name for tool in tools]}")
-
-    return tools
+    return await client.get_tools()
 
 
-async def finance_research(query):
-    tools = await get_tools()
+async def finance_research(query: str) -> str:
+    tools = await _get_tools()
 
-    agent = create_agent(model=llm, tools=tools, system_prompt=system_prompt)
-
+    # ✅ FIX: create_react_agent uses `prompt=` not `system_prompt=`
+    agent  = create_react_agent(model=llm, tools=tools, prompt=_SYSTEM_PROMPT)
     result = await agent.ainvoke({"messages": [HumanMessage(query)]})
 
-    response = result["messages"][-1].text
+    last   = result["messages"][-1]
+    # ✅ FIX: AIMessage uses .content, not .text
+    content = last.content
+    if isinstance(content, list):
+        text = "".join(b.get("text", "") for b in content if isinstance(b, dict))
+    else:
+        text = str(content)
 
-    print(response)
-
-    return response
+    print(text)
+    return text
 
 
 if __name__ == "__main__":
-    query = "What is the current stock price and recent performance of Apple (AAPL)? Also show me the latest news."
-
+    query = "Current stock price and recent news for Apple (AAPL)."
     asyncio.run(finance_research(query))

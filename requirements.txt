@@ -12,6 +12,7 @@ langsmith
 langchain-google-genai
 langchain_qdrant
 langchain_mcp_adapters
+langchain-text-splitters
 
 # DeepAgents
 deepagents
@@ -23,11 +24,13 @@ docling
 
 # Vector stores & embeddings
 fastembed
+qdrant-client
 sentence_transformers
 
 # API clients
 ollama
 google-genai
+uv
 
 # Utilities
 jupyter

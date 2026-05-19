@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 # Suppress warnings and load API keys
 warnings.filterwarnings('ignore')
-load_dotenv()
+load_dotenv(override=True)
 
 # Required Imports for Ingestion
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
@@ -27,6 +27,7 @@ from scripts.config import (
     INGEST_SLEEP_SECONDS,
     MAX_INGEST_CHUNKS,
     OLLAMA_BASE_URL,
+    QDRANT_API_KEY,
     QDRANT_COLLECTION_NAME,
     QDRANT_URL,
     RAG_FILE_GLOB,
@@ -124,7 +125,7 @@ embeddings = OllamaEmbeddings(
 
 # 5. Connect to Qdrant & Create Collection (If it doesn't exist)
 print(f"Connecting to Qdrant at {QDRANT_URL}...")
-client = QdrantClient(url=QDRANT_URL)
+client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY or None)
 
 if not client.collection_exists(collection_name=QDRANT_COLLECTION_NAME):
     print(f"Creating collection '{QDRANT_COLLECTION_NAME}'...")

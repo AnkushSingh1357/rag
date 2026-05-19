@@ -1,36 +1,32 @@
-"""
-Utility functions for agent operations.
-"""
-from langchain.messages import HumanMessage, AIMessage, ToolMessage
+"""Utility functions for agent operations."""
+
+# ✅ FIX: langchain_core.messages, not langchain.messages
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 
 
-def stream_agent_response(agent, query, thread_id="default", user_id=None):
+def stream_agent_response(agent, query: str, thread_id: str = "default", user_id: str = None):
+    config = {"configurable": {"thread_id": thread_id, "user_id": user_id}}
+    state = {"messages": [HumanMessage(query)], "thread_id": thread_id, "user_id": user_id}
 
-    config = {'configurable': {'thread_id': thread_id, 'user_id': user_id}}
-    
-    state = {'messages': [HumanMessage(query)], 'thread_id': thread_id, 'user_id': user_id}
-    
-    for chunk in agent.stream(
-        state,
-        stream_mode='messages',
-        config=config
-    ):
-        # Extract message from chunk
+    for chunk in agent.stream(state, stream_mode="messages", config=config):
         message = chunk[0] if isinstance(chunk, tuple) else chunk
-        
-        # Handle AI messages with tool calls
+
         if isinstance(message, AIMessage) and message.tool_calls:
-            for tool_call in message.tool_calls:
-                print(f"\n  Tool Called: {tool_call['name']}")
-                print(f"   Args: {tool_call['args']}")
-                print()
-        
-        # Handle tool responses
+            for tc in message.tool_calls:
+                print(f"\n  Tool Called : {tc['name']}")
+                print(f"  Args        : {tc['args']}\n")
+
         elif isinstance(message, ToolMessage):
-            print(f"\n  Tool Result (length: {len(message.text)} chars)")
-            print()
-        
-        # Handle AI text responses
-        elif isinstance(message, AIMessage) and message.text:
-            # Stream the text content
-            print(message.text, end='', flush=True)
+            # ✅ FIX: ToolMessage exposes content, not .text
+            length = len(message.content) if isinstance(message.content, str) else 0
+            print(f"\n  Tool Result : {length} chars\n")
+
+        elif isinstance(message, AIMessage):
+            # ✅ FIX: AIMessage uses .content, not .text
+            content = message.content
+            if isinstance(content, list):
+                text = "".join(b.get("text", "") for b in content if isinstance(b, dict))
+            else:
+                text = str(content)
+            if text:
+                print(text, end="", flush=True)

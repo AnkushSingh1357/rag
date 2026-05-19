@@ -16,3 +16,11 @@ wheels/
 *api_outputs
 *codex
 *data
+
+# Runtime outputs and local artifacts
+agent_files/
+research_outputs/
+*.db
+*.db-shm
+*.db-wal
+*.zip
