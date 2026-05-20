@@ -319,10 +319,11 @@ def _build_fast_queries(prompt: str, intent: dict | None = None) -> list[str]:
     years = intent.get("years") or _find_requested_years(prompt)
     quarters = intent.get("quarters") or _find_requested_quarters(prompt)
     prompt_lower = prompt.lower()
-    metric_key = intent.get("metric") or ("net_income" if "net income" in prompt_lower else "revenue")
+    metric_key = intent.get("metric") or ("net_income" if "income" in prompt_lower or "profit" in prompt_lower else "revenue")
     metric = "net income" if metric_key == "net_income" else "revenue"
 
-    queries = []
+    # Always include the exact raw prompt for semantic search!
+    queries = [prompt]
     if intent.get("breakdown") == "product_category" and companies and years:
         for company in companies[:2]:
             for year in years[:3]:
@@ -417,11 +418,11 @@ def _yahoo_quarterly_financial_table(prompt: str, intent: dict | None = None) ->
     prompt_lower = prompt.lower()
     quarters = intent.get("quarters") or _find_requested_quarters(prompt)
     years = intent.get("years") or _find_requested_years(prompt)
-    wants_quarterly = "quarterly" in prompt_lower or bool(quarters)
+    wants_quarterly = "quarterly" in prompt_lower or "quaterly" in prompt_lower or bool(quarters)
     if not wants_quarterly:
         return None
 
-    metric_name = "Net Income" if intent.get("metric") == "net_income" or "net income" in prompt_lower or "profit" in prompt_lower else "Revenue"
+    metric_name = "Net Income" if intent.get("metric") == "net_income" or "income" in prompt_lower or "profit" in prompt_lower else "Revenue"
     row_name = "Net Income" if metric_name == "Net Income" else "Total Revenue"
     tickers = {
         "Apple": "AAPL",
@@ -628,7 +629,15 @@ def _fast_rag_answer(prompt: str) -> str:
         )),
         HumanMessage(content=f"User question:\n{prompt}\n\nRetrieved snippets:\n{snippets}"),
     ])
-    return _extract_text(response)
+    base_response = _extract_text(response)
+    
+    # Safely format the raw chunks into an HTML expander
+    safe_snippets = snippets.replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+    expander_html = (
+        f"\n\n<details><summary>🔍 <b>View Sources</b></summary>"
+        f"<p style='font-size: 0.85em; color: gray; margin-top: 10px;'>{safe_snippets}</p></details>"
+    )
+    return base_response + expander_html
 
 def _wants_chart(prompt: str) -> bool:
     prompt_lower = prompt.lower()
@@ -830,7 +839,7 @@ with st.sidebar:
 # ==========================================
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+        st.markdown(message["content"], unsafe_allow_html=True)
 
         # Render any charts that were saved with this message
         charts = message.get("charts", [])
@@ -919,7 +928,7 @@ if prompt:
             status_box.empty()
 
             # Render text
-            st.markdown(final_reply)
+            st.markdown(final_reply, unsafe_allow_html=True)
 
             # Render charts in a responsive 2-column grid
             if new_charts:
