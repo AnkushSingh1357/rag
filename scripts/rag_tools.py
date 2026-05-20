@@ -15,6 +15,14 @@ from langchain_ollama import OllamaEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from langchain_core.tools import tool
 from qdrant_client.models import Filter, FieldCondition, MatchValue
+from sentence_transformers import CrossEncoder
+import logging
+
+# Suppress verbose sentence_transformers output
+logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
+
+# Load lightweight re-ranker globally (loads once on startup)
+reranker_model = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', max_length=512)
 
 from scripts.schema import ChunkMetadata
 from scripts.config import (
@@ -167,25 +175,37 @@ def _build_qdrant_filter(filters: dict) -> Filter | None:
 # ─────────────────────────────────────────────
 
 @tool
-def hybrid_search(query: str, k: int = 1) -> str:
+def hybrid_search(query: str, k: int = 1, retrieve_k: int = None) -> str:
     """Search historical SEC filings (10-K, 10-Q) for financial data.
 
     Args:
         query: Specific financial question or metric to look up.
-        k:     Number of documents to retrieve (default 1 to minimise tokens).
+        k:     Number of documents to output (default 1 to minimise tokens).
+        retrieve_k: Optional custom number of documents to pull from Qdrant before re-ranking.
 
     Returns:
         Source citation + short content snippet.
     """
     filters        = extract_filters(query)
     qdrant_filter  = _build_qdrant_filter(filters)
-    results        = vector_store.similarity_search(query=query, k=k, filter=qdrant_filter)
+    
+    # Stage 1: Dense Retrieval (Fetch retrieve_k chunks)
+    actual_retrieve_k = retrieve_k if retrieve_k is not None else min(k * 5, 50)
+    results    = vector_store.similarity_search(query=query, k=actual_retrieve_k, filter=qdrant_filter)
 
     if not results:
         return "No historical documents found for this query."
 
+    # Stage 2: Cross-Encoder Re-ranking
+    pairs = [[query, doc.page_content] for doc in results]
+    scores = reranker_model.predict(pairs)
+    
+    # Sort descending by relevance score and slice top K
+    scored_results = sorted(zip(scores, results), key=lambda x: x[0], reverse=True)
+    top_results = [doc for score, doc in scored_results[:k]]
+
     snippets = []
-    for idx, doc in enumerate(results, start=1):
+    for idx, doc in enumerate(top_results, start=1):
         source = doc.metadata.get("source", "SEC Filing")
         snippet = doc.page_content[:500].strip()
         snippets.append(f"[{idx}] Source: {source}\nContent: {snippet}")

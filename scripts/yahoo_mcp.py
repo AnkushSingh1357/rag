@@ -6,6 +6,7 @@ warnings.filterwarnings("ignore")
 import os
 import sys
 import asyncio
+import shutil
 
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
@@ -21,6 +22,13 @@ from langgraph.prebuilt import create_react_agent
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from scripts.config import GROQ_API_KEY
+
+
+def _uvx_command() -> str:
+    venv_uvx = os.path.join(os.path.dirname(sys.executable), "uvx.exe" if sys.platform == "win32" else "uvx")
+    if os.path.exists(venv_uvx):
+        return venv_uvx
+    return shutil.which("uvx") or "uvx"
 
 llm = ChatGroq(
     groq_api_key=GROQ_API_KEY,
@@ -56,7 +64,7 @@ async def _get_tools():
     client = MultiServerMCPClient(
         {
             "yahoo-finance": {
-                "command": "uvx",
+                "command": _uvx_command(),
                 "args": ["yahoo-finance-mcp-server"],
                 "transport": "stdio",
             }
