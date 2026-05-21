@@ -10,12 +10,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # Import orchestrator from main.py
-from main import orchestrator_agent, SUPPORTED_COMPANIES, checkpointer
-from scripts.config import MAIN_CHECKPOINT_DB
+from main import orchestrator_agent, SUPPORTED_COMPANIES, checkpointer, DB_URI
 from scripts.llm_utils import get_rotating_llm
-from scripts.rag_tools import hybrid_search
+from scripts.rag_tools import hybrid_search, core_hybrid_search, calculate_coherence, calculate_info_density, calculate_readability
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
-import sqlite3
+import psycopg
 
 # ==========================================
 # 1. PAGE CONFIGURATION
@@ -109,17 +108,13 @@ if "messages" not in st.session_state:
         }
     ]
 
-# ── Helper: load recent threads from SQLite ─────────────────────────────────
+# ── Helper: load recent threads from PostgreSQL ─────────────────────────────
 def load_recent_threads() -> list[str]:
-    if not os.path.exists(MAIN_CHECKPOINT_DB):
-        return []
     try:
-        conn = sqlite3.connect(MAIN_CHECKPOINT_DB)
-        cursor = conn.cursor()
-        cursor.execute("SELECT thread_id FROM checkpoints GROUP BY thread_id ORDER BY MAX(rowid) DESC LIMIT 15;")
-        threads = [row[0] for row in cursor.fetchall()]
-        conn.close()
-        return threads
+        with psycopg.connect(DB_URI) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT DISTINCT thread_id FROM checkpoints ORDER BY thread_id DESC LIMIT 15;")
+                return [row[0] for row in cur.fetchall()]
     except Exception:
         return []
 
@@ -604,12 +599,21 @@ def _fast_rag_answer(prompt: str) -> str:
         return yahoo_answer
 
     snippet_parts = []
+    global_top_score = 0.0
+    global_min_score = 1.0
+    global_source_count = 0
     per_query_k = max(1, min(int(st.session_state.get("fast_rag_k", os.getenv("FAST_RAG_K", "2"))), 20))
     retrieve_k_val = int(st.session_state.get("fast_rag_retrieve_k", per_query_k * 5))
     for query in _build_fast_queries(prompt, intent):
-        result = hybrid_search.invoke({"query": query, "k": per_query_k, "retrieve_k": retrieve_k_val})
+        result, metadata = core_hybrid_search(query, k=per_query_k, retrieve_k=retrieve_k_val, return_metadata=True)
         if "No historical documents found" not in result:
             snippet_parts.append(f"Query: {query}\n{result}")
+            global_top_score = max(global_top_score, metadata.get("top_chunk_score", 0.0))
+            global_min_score = min(global_min_score, metadata.get("min_chunk_score", 1.0))
+            global_source_count += metadata.get("source_count", 0)
+    
+    # Context spread is the difference between top and bottom score (high spread = dilute context)
+    context_spread = max(0.0, global_top_score - global_min_score) if global_top_score > 0 else 0.0
 
     snippets = "\n\n---\n\n".join(snippet_parts)
     if "No historical documents found" in snippets:
@@ -631,10 +635,71 @@ def _fast_rag_answer(prompt: str) -> str:
     ])
     base_response = _extract_text(response)
     
+    # ── Evaluate RAG Quality ──────────────────────────────────────────────────
+    coherence = calculate_coherence(base_response)
+    info_density = calculate_info_density(base_response)
+    readability = calculate_readability(base_response)
+    response_length = len(base_response)
+
+    try:
+        with psycopg.connect(DB_URI, autocommit=True) as _conn:
+            with _conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO rag_evaluations (query, coherence_score, top_chunk_score, source_count, response_length, info_density, context_spread, readability) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                    (prompt, coherence, global_top_score, global_source_count, response_length, info_density, context_spread, readability)
+                )
+    except Exception as e:
+        print(f"Failed to log eval: {e}")
+
+    # ── Generate UI Panel ─────────────────────────────────────────────────────
+    def pb(score, max_val, good_threshold, ok_threshold, reverse_colors=False):
+        if reverse_colors:
+            color = "#28a745" if score <= good_threshold else "#ffc107" if score <= ok_threshold else "#dc3545"
+        else:
+            color = "#28a745" if score >= good_threshold else "#ffc107" if score >= ok_threshold else "#dc3545"
+        pct = max(5, min(100, int((score / max_val) * 100))) if max_val > 0 else 0
+        return f'<div style="background-color: #333; border-radius: 4px; width: 100%; height: 8px; margin-top: 4px;"><div style="background-color: {color}; width: {pct}%; height: 100%; border-radius: 4px;"></div></div>'
+
+    eval_html = f"""
+    <details style="background-color: #1E1E1E; padding: 10px 15px; border-radius: 8px; margin-top: 15px; border: 1px solid #333;">
+        <summary style="color: #E0E0E0; font-size: 14px; font-weight: bold; cursor: pointer;">📊 Quality Metrics</summary>
+        <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 15px;">
+            <div>
+                <div style="display: flex; justify-content: space-between; font-size: 12px; color: #A0A0A0;">
+                    <span>Retrieval Confidence (higher is better)</span>
+                    <span>{global_top_score:.2f}</span>
+                </div>
+                {pb(global_top_score, 1.0, 0.7, 0.4)}
+            </div>
+            <div>
+                <div style="display: flex; justify-content: space-between; font-size: 12px; color: #A0A0A0;">
+                    <span>Information Density (higher is better)</span>
+                    <span>{info_density:.2f}</span>
+                </div>
+                {pb(info_density, 0.2, 0.1, 0.05)}
+            </div>
+            <div>
+                <div style="display: flex; justify-content: space-between; font-size: 12px; color: #A0A0A0;">
+                    <span>Context Spread (lower is tighter)</span>
+                    <span>{context_spread:.2f}</span>
+                </div>
+                {pb(context_spread, 1.0, 0.1, 0.3, reverse_colors=True)}
+            </div>
+            <div>
+                <div style="display: flex; justify-content: space-between; font-size: 12px; color: #A0A0A0;">
+                    <span>Readability (higher is simpler)</span>
+                    <span>{readability:.2f}</span>
+                </div>
+                {pb(readability, 1.0, 0.5, 0.3)}
+            </div>
+        </div>
+    </details>
+    """
+
     # Safely format the raw chunks into an HTML expander
     safe_snippets = snippets.replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
     expander_html = (
-        f"\n\n<details><summary>🔍 <b>View Sources</b></summary>"
+        f"{eval_html}\n\n<details><summary>🔍 <b>View Sources</b></summary>"
         f"<p style='font-size: 0.85em; color: gray; margin-top: 10px;'>{safe_snippets}</p></details>"
     )
     return base_response + expander_html

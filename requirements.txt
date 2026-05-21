@@ -36,4 +36,6 @@ yfinance
 # Utilities
 jupyter
 nest_asyncio
-langgraph-checkpoint-sqlite
+langgraph-checkpoint-postgres
+psycopg[binary]
+psycopg_pool

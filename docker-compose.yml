@@ -9,6 +9,18 @@ services:
       - ./agent_files:/app/agent_files
     command: python main_deepagents.py
 
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: rag_user
+      POSTGRES_PASSWORD: rag_password
+      POSTGRES_DB: rag_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
   qdrant:
     image: qdrant/qdrant:latest
     profiles:
@@ -22,3 +34,4 @@ services:
 
 volumes:
   qdrant_data:
+  postgres_data:

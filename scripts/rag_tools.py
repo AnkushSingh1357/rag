@@ -174,6 +174,45 @@ def _build_qdrant_filter(filters: dict) -> Filter | None:
 # Tools
 # ─────────────────────────────────────────────
 
+def core_hybrid_search(query: str, k: int = 1, retrieve_k: int = None, return_metadata: bool = False) -> str | tuple[str, dict]:
+    filters        = extract_filters(query)
+    qdrant_filter  = _build_qdrant_filter(filters)
+    
+    # Stage 1: Dense Retrieval (Fetch retrieve_k chunks)
+    actual_retrieve_k = retrieve_k if retrieve_k is not None else min(k * 5, 50)
+    results    = vector_store.similarity_search(query=query, k=actual_retrieve_k, filter=qdrant_filter)
+
+    if not results:
+        empty_msg = "No historical documents found for this query."
+        return (empty_msg, {"top_chunk_score": 0.0, "source_count": 0}) if return_metadata else empty_msg
+
+    # Stage 2: Cross-Encoder Re-ranking
+    pairs = [[query, doc.page_content] for doc in results]
+    scores = reranker_model.predict(pairs)
+    
+    # Sort descending by relevance score and slice top K
+    scored_results = sorted(zip(scores, results), key=lambda x: x[0], reverse=True)
+    top_results = [(score, doc) for score, doc in scored_results[:k]]
+
+    snippets = []
+    unique_sources = set()
+    for idx, (score, doc) in enumerate(top_results, start=1):
+        source = doc.metadata.get("source", "SEC Filing")
+        unique_sources.add(source)
+        snippet = doc.page_content[:500].strip()
+        snippets.append(f"[{idx}] Source: {source}\nContent: {snippet}")
+
+    final_snippets = "\n\n".join(snippets)
+    if return_metadata:
+        top_score = _sigmoid(float(top_results[0][0])) if top_results else 0.0
+        min_score = _sigmoid(float(top_results[-1][0])) if top_results else 0.0
+        return final_snippets, {
+            "top_chunk_score": top_score,
+            "min_chunk_score": min_score,
+            "source_count": len(unique_sources)
+        }
+    return final_snippets
+
 @tool
 def hybrid_search(query: str, k: int = 1, retrieve_k: int = None) -> str:
     """Search historical SEC filings (10-K, 10-Q) for financial data.
@@ -186,31 +225,59 @@ def hybrid_search(query: str, k: int = 1, retrieve_k: int = None) -> str:
     Returns:
         Source citation + short content snippet.
     """
-    filters        = extract_filters(query)
-    qdrant_filter  = _build_qdrant_filter(filters)
+    return core_hybrid_search(query, k, retrieve_k, return_metadata=False)
+
+import math
+
+def _sigmoid(x: float) -> float:
+    return 1 / (1 + math.exp(-x))
+
+def calculate_coherence(text: str) -> float:
+    """Calculate answer coherence using the cross-encoder on adjacent sentences."""
+    sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+|\n+', text) if len(s.strip()) > 10]
+    if len(sentences) < 2:
+        return 1.0 # default for very short answers
     
-    # Stage 1: Dense Retrieval (Fetch retrieve_k chunks)
-    actual_retrieve_k = retrieve_k if retrieve_k is not None else min(k * 5, 50)
-    results    = vector_store.similarity_search(query=query, k=actual_retrieve_k, filter=qdrant_filter)
-
-    if not results:
-        return "No historical documents found for this query."
-
-    # Stage 2: Cross-Encoder Re-ranking
-    pairs = [[query, doc.page_content] for doc in results]
+    pairs = [[sentences[i], sentences[i+1]] for i in range(len(sentences)-1)]
     scores = reranker_model.predict(pairs)
+    normalized_scores = [_sigmoid(float(s)) for s in scores]
+    return float(sum(normalized_scores) / len(normalized_scores))
+
+def calculate_info_density(text: str) -> float:
+    """Calculate the ratio of numbers, percentages, and money symbols to words."""
+    words = text.split()
+    if not words:
+        return 0.0
     
-    # Sort descending by relevance score and slice top K
-    scored_results = sorted(zip(scores, results), key=lambda x: x[0], reverse=True)
-    top_results = [doc for score, doc in scored_results[:k]]
+    data_points = 0
+    for word in words:
+        if any(char.isdigit() for char in word) or "$" in word or "%" in word:
+            data_points += 1
+            
+    return float(data_points / len(words))
 
-    snippets = []
-    for idx, doc in enumerate(top_results, start=1):
-        source = doc.metadata.get("source", "SEC Filing")
-        snippet = doc.page_content[:500].strip()
-        snippets.append(f"[{idx}] Source: {source}\nContent: {snippet}")
-
-    return "\n\n".join(snippets)
+def calculate_readability(text: str) -> float:
+    """Calculate an approximate Flesch Reading Ease score. Lower means harder/more complex."""
+    words = text.split()
+    sentences = re.split(r'[.!?]+', text)
+    sentences = [s for s in sentences if s.strip()]
+    
+    if not words or not sentences:
+        return 0.0
+        
+    num_words = len(words)
+    num_sentences = len(sentences)
+    
+    # Very crude syllable counting approximation (vowels)
+    num_syllables = sum(len(re.findall(r'[aeiouy]+', word, re.IGNORECASE)) for word in words)
+    # Ensure at least 1 syllable per word
+    num_syllables = max(num_syllables, num_words)
+    
+    # Flesch Reading Ease formula
+    score = 206.835 - 1.015 * (num_words / num_sentences) - 84.6 * (num_syllables / num_words)
+    # Normalize to roughly 0.0 - 1.0 (typical score is 0 to 100)
+    normalized = max(0.0, min(100.0, score)) / 100.0
+    return float(normalized)
 
 
 @tool

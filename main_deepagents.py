@@ -1,5 +1,5 @@
 import os
-import sqlite3
+import psycopg
 import sys
 import warnings
 from datetime import datetime
@@ -10,7 +10,7 @@ load_dotenv(override=True)
 warnings.filterwarnings('ignore')
 
 from langchain_core.messages import ToolMessage
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.postgres import PostgresSaver
 from scripts.llm_utils import RotatingChatGroq, get_rotating_llm
 
 # DeepAgent imports
@@ -94,8 +94,10 @@ research_sub_agent = {
 # 4. INITIALIZE DEEP AGENT ORCHESTRATOR
 # ==========================================
 def get_deep_agent(user_id, thread_id):
-    conn = sqlite3.connect(DEEP_AGENT_CHECKPOINT_DB, check_same_thread=False)
-    checkpointer = SqliteSaver(conn=conn)
+    db_uri = os.getenv("POSTGRES_DB_URI", "postgresql://rag_user:rag_password@localhost:5433/rag_db")
+    conn = psycopg.connect(db_uri, autocommit=True)
+    checkpointer = PostgresSaver(conn)
+    checkpointer.setup()
     backend = get_research_backend(user_id, thread_id)
 
     agent = create_deep_agent(

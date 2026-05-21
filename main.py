@@ -1,7 +1,6 @@
 import os
 import sys
 import time
-import sqlite3
 import warnings
 import json
 import groq
@@ -15,7 +14,8 @@ from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, System
 from langgraph.prebuilt import create_react_agent, InjectedState
 from langchain_core.tools import tool, InjectedToolCallId
 from langgraph.types import Command
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.postgres import PostgresSaver
+from psycopg_pool import ConnectionPool
 from langchain_groq import ChatGroq
 
 import matplotlib
@@ -60,8 +60,39 @@ llm = get_rotating_llm(
     max_tokens=900,
 )
 
-conn = sqlite3.connect(MAIN_CHECKPOINT_DB, check_same_thread=False)
-checkpointer = SqliteSaver(conn=conn)
+import psycopg
+
+DB_URI = os.getenv("POSTGRES_DB_URI", "postgresql://rag_user:rag_password@localhost:5433/rag_db")
+
+# 1. Create tables using an autocommit connection
+with psycopg.connect(DB_URI, autocommit=True) as _conn:
+    PostgresSaver(_conn).setup()
+    with _conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS rag_evaluations (
+                id SERIAL PRIMARY KEY,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                query TEXT,
+                coherence_score REAL,
+                top_chunk_score REAL,
+                source_count INTEGER,
+                response_length INTEGER,
+                info_density REAL,
+                context_spread REAL,
+                readability REAL
+            )
+        """)
+        # In case the table already exists from a previous run, add the new columns
+        try:
+            cur.execute("ALTER TABLE rag_evaluations ADD COLUMN IF NOT EXISTS info_density REAL")
+            cur.execute("ALTER TABLE rag_evaluations ADD COLUMN IF NOT EXISTS context_spread REAL")
+            cur.execute("ALTER TABLE rag_evaluations ADD COLUMN IF NOT EXISTS readability REAL")
+        except Exception:
+            pass
+
+# 2. Initialize the production connection pool
+pool = ConnectionPool(conninfo=DB_URI, max_size=20, kwargs={"autocommit": True})
+checkpointer = PostgresSaver(pool)
 
 # ==========================================
 # 2. CHART COLORS
@@ -413,7 +444,7 @@ def run_editor(state: Annotated[DeepAgentState, InjectedState]) -> str:
 # 6. HISTORY TRIMMER
 # ==========================================
 # Keeps system prompt + last N messages to cap token usage.
-# Trimmed messages are still saved in SQLite — they just aren't sent to the LLM.
+# Trimmed messages are still saved in PostgreSQL — they just aren't sent to the LLM.
 MAX_HISTORY_MESSAGES = 10  # tune this: lower = fewer tokens, less cross-query memory
 
 def _trim_orchestrator_messages(state: DeepAgentState) -> list:
