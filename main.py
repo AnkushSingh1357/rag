@@ -50,7 +50,7 @@ from scripts.config import (
 # ==========================================
 # SUPPORTED COMPANIES
 # ==========================================
-SUPPORTED_COMPANIES = ["Apple", "Amazon", "Meta", "Microsoft"]
+SUPPORTED_COMPANIES = ["Apple", "Amazon", "Meta", "Google"]
 
 from scripts.llm_utils import get_rotating_llm
 
@@ -101,7 +101,7 @@ CHART_COLORS = {
     "Apple":     "#A8A8A8",
     "Amazon":    "#FF9900",
     "Meta":      "#1877F2",
-    "Microsoft": "#00A4EF",
+    "Google":    "#DB4437",
 }
 
 # Used for pie slices and any label not matching a company name

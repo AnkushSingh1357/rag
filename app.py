@@ -20,7 +20,7 @@ import psycopg
 # 1. PAGE CONFIGURATION
 # ==========================================
 st.set_page_config(
-    page_title="Finance Copilot — Apple · Amazon · Meta · Microsoft",
+    page_title="Finance Copilot — Apple · Amazon · Meta · Google",
     page_icon="📈",
     layout="wide",
 )
@@ -29,14 +29,16 @@ st.set_page_config(
 st.markdown("""
 <style>
     /* Global dark background */
-    [data-testid="stAppViewContainer"] { background-color: #0E1117; }
-    [data-testid="stSidebar"]          { background-color: #161B22; }
+    [data-testid="stAppViewContainer"] { background-color: #0E1117; color: #FAFAFA; }
+    [data-testid="stSidebar"]          { background-color: #161B22; color: #FAFAFA; }
 
     /* Chat bubbles */
     [data-testid="stChatMessage"] {
         border-radius: 10px;
         padding: 10px 14px;
         margin-bottom: 6px;
+        background-color: #1E232B;
+        color: #FAFAFA;
     }
 
     /* Company badge pills */
@@ -51,12 +53,17 @@ st.markdown("""
     .badge-apple     { background:#555;   color:#fff; }
     .badge-amazon    { background:#FF9900; color:#000; }
     .badge-meta      { background:#1877F2; color:#fff; }
-    .badge-microsoft { background:#00A4EF; color:#fff; }
+    .badge-google { background:#DB4437; color:#fff; }
 
     /* Section divider */
     .section-divider {
         border-top: 1px solid #30363D;
         margin: 18px 0;
+    }
+    
+    /* Ensure markdown text in containers also defaults to white */
+    .stMarkdown, .stText, .stTitle, h1, h2, h3, p {
+        color: #FAFAFA !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -66,7 +73,7 @@ st.markdown("""
 # ==========================================
 st.title("📈 Finance Copilot")
 st.markdown(
-    "Trained on **Apple · Amazon · Meta · Microsoft** filings. "
+    "Trained on **Apple · Amazon · Meta · Google** filings. "
     "Ask complex financial questions — the Orchestrator plans, delegates to "
     "Research sub-agents, and auto-generates charts."
 )
@@ -75,10 +82,15 @@ company_badges = "".join([
     '<span class="badge badge-apple">🍎 Apple</span>',
     '<span class="badge badge-amazon">📦 Amazon</span>',
     '<span class="badge badge-meta">📘 Meta</span>',
-    '<span class="badge badge-microsoft">🪟 Microsoft</span>',
+    '<span class="badge badge-google">🔍 Google</span>',
 ])
 st.markdown(company_badges, unsafe_allow_html=True)
 st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+
+with st.sidebar:
+    st.title("⚙️ Settings")
+    st.session_state.fast_mode = st.toggle("⚡ Fast Mode (Quick RAG)", value=st.session_state.get("fast_mode", True))
+    st.caption("Turn this off to enable the Multi-Agent Deep Research Orchestrator for complex, multi-quarter analysis.")
 
 # ==========================================
 # 3. SESSION STATE
@@ -98,9 +110,9 @@ if "messages" not in st.session_state:
             "role": "assistant",
             "content": (
                 "Hello! I'm your Finance Copilot, trained on Apple, Amazon, Meta, "
-                "and Microsoft data.\n\n"
+                "and Google data.\n\n"
                 "Try asking:\n"
-                "- *Compare revenue growth of Apple and Microsoft from 2021–2023*\n"
+                "- *Compare revenue growth of Apple and Google from 2021–2023*\n"
                 "- *What were Meta's net income trends over the last 4 quarters?*\n"
                 "- *Show Amazon's AWS vs retail segment breakdown as a pie chart*"
             ),
@@ -288,7 +300,7 @@ def _find_requested_companies(prompt: str) -> list[str]:
         "Apple": ("apple", "aapl"),
         "Amazon": ("amazon", "amzn"),
         "Meta": ("meta", "facebook"),
-        "Microsoft": ("microsoft", "msft"),
+        "Google": ("google", "googl", "alphabet"),
     }
     for company, names in aliases.items():
         if any(re.search(rf"\b{re.escape(name)}\b", prompt_lower) for name in names):
@@ -353,7 +365,7 @@ def _yahoo_financial_table(prompt: str, intent: dict | None = None) -> str | Non
         "Apple": "AAPL",
         "Amazon": "AMZN",
         "Meta": "META",
-        "Microsoft": "MSFT",
+        "Google": "GOOGL",
     }
 
     broad_financial_lookup = any(
@@ -423,7 +435,7 @@ def _yahoo_quarterly_financial_table(prompt: str, intent: dict | None = None) ->
         "Apple": "AAPL",
         "Amazon": "AMZN",
         "Meta": "META",
-        "Microsoft": "MSFT",
+        "Google": "GOOGL",
     }
     ticker = tickers.get(companies[0])
     if not ticker:
@@ -551,8 +563,8 @@ def _live_market_answer(prompt: str, intent: dict | None = None) -> str | None:
             "amazon": ("AMZN", "Amazon"),
             "amzn": ("AMZN", "Amazon"),
             "meta": ("META", "Meta"),
-            "microsoft": ("MSFT", "Microsoft"),
-            "msft": ("MSFT", "Microsoft"),
+            "google": ("GOOGL", "Alphabet"),
+            "googl": ("GOOGL", "Alphabet"),
             "google": ("GOOGL", "Alphabet"),
         }
         for token, mapped in ticker_map.items():
@@ -594,9 +606,7 @@ def _fast_rag_answer(prompt: str) -> str:
     if quarterly_answer and (intent.get("chart_type") or "quarterly" in prompt.lower()):
         return quarterly_answer
 
-    yahoo_answer = _yahoo_financial_table(prompt, intent)
-    if yahoo_answer and "microsoft" in prompt.lower():
-        return yahoo_answer
+    # Historical data queries will fall through to the Qdrant hybrid search below.
 
     snippet_parts = []
     global_top_score = 0.0
@@ -626,7 +636,8 @@ def _fast_rag_answer(prompt: str) -> str:
         SystemMessage(content=(
             "Answer the user's finance question using only the retrieved SEC filing snippets. "
             "Be concise. Include numbers only if present in the snippets; never fill missing periods from memory. "
-            "You MUST append a bold **Sources:** section at the very end of your response, listing the exact source filenames provided in the snippets. "
+            "If the requested information is NOT present in the snippets at all, reply EXACTLY starting with 'NO_DATA_FOUND: ' followed by a brief explanation. "
+            "Otherwise, if the data is found, you MUST append a bold **Sources:** section at the very end of your response, listing the exact source filenames provided in the snippets. "
             "If a chart is requested, output a pipe-delimited markdown table with exactly two columns "
             "before any notes: Period and Value. Use one row per line, including the separator row. "
             "Example:\n| Period | Value |\n|---|---:|\n| Q1 2024 | 123 |\nDo not use tab-separated tables."
@@ -634,6 +645,12 @@ def _fast_rag_answer(prompt: str) -> str:
         HumanMessage(content=f"User question:\n{prompt}\n\nRetrieved snippets:\n{snippets}"),
     ])
     base_response = _extract_text(response)
+    
+    if base_response.startswith("NO_DATA_FOUND:"):
+        return base_response.replace("NO_DATA_FOUND:", "").strip()
+    elif "NO_DATA_FOUND:" in base_response:
+        return base_response.replace("NO_DATA_FOUND:", "").strip()
+
     
     # ── Evaluate RAG Quality ──────────────────────────────────────────────────
     coherence = calculate_coherence(base_response)
@@ -919,10 +936,10 @@ for message in st.session_state.messages:
 # 6. CHAT INPUT
 # ==========================================
 EXAMPLE_QUERIES = [
-    "Compare Apple vs Microsoft revenue 2021-2023 (bar chart)",
+    "Compare Apple vs Google revenue 2021-2023 (bar chart)",
     "Meta's quarterly net income — line chart",
     "Amazon AWS vs retail revenue pie chart",
-    "Show Microsoft cloud vs on-prem breakdown",
+    "Show Google cloud vs ad revenue breakdown",
 ]
 
 # Quick-start buttons (only before first user message)
@@ -936,7 +953,7 @@ if len(st.session_state.messages) == 1:
 
 # Handle pending quick-start query
 prompt = st.chat_input(
-    "E.g., Compare Amazon and Microsoft revenues for 2022–2023 with a bar chart"
+    "E.g., Compare Amazon and Google revenues for 2022–2023 with a bar chart"
 )
 if not prompt and "pending_query" in st.session_state:
     prompt = st.session_state.pop("pending_query")
